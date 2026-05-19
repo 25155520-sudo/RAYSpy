@@ -38,17 +38,25 @@ async function init() {
   });
 
   try {
-    const streetLayer = viewer.imageryLayers.addImageryProvider(
+    const osmLayer = viewer.imageryLayers.addImageryProvider(
       new Cesium.UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        credit: 'Esri, HERE, Garmin, © OpenStreetMap contributors',
+        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        credit: '© OpenStreetMap contributors',
         minimumLevel: 0,
         maximumLevel: 19,
       })
     );
-    streetLayer.alpha = 0.5;
+    osmLayer.alpha = 1.0;
   } catch (e) {
-    console.error('Failed to add street layer:', e);
+    console.error('Failed to add OpenStreetMap layer:', e);
+  }
+
+  try {
+    const buildingsTileset = await Cesium.createOsmBuildingsAsync();
+    viewer.scene.primitives.add(buildingsTileset);
+    console.log('OSM Buildings tileset added');
+  } catch (e) {
+    console.error('Failed to load OSM Buildings:', e);
   }
 
   const globe = viewer.scene.globe;
@@ -78,7 +86,7 @@ async function init() {
   if (accessToken) {
     const credit = document.createElement('div');
     credit.style.cssText = 'position:absolute;bottom:4px;right:4px;font-size:10px;color:#888;z-index:10';
-    credit.textContent = 'Terrain: Cesium World Terrain | Imagery: Cesium World Imagery + Esri Streets';
+    credit.textContent = 'Terrain: Cesium World Terrain | Imagery: OpenStreetMap + Cesium World Imagery | Buildings: Cesium OSM Buildings';
     viewer.container.appendChild(credit);
   }
 
