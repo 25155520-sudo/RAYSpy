@@ -11,7 +11,8 @@
     "copy-cesium": "node scripts/copy-cesium.js"
   },
   "dependencies": {
-    "cesium": "^1.141.0"
+    "cesium": "^1.141.0",
+    "satellite.js": "^4.1.4"
   },
   "devDependencies": {
     "https-proxy-agent": "^9.0.0",
