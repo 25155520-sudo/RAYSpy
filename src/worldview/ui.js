@@ -1,477 +1,544 @@
-import { renderDetailPanel } from './details.js';
-import { CctvFeedPlayer } from './cctvFeed.js';
-import { SpyHud } from './spyHud.js';
-
-export const DATA_LAYERS = [
-  {
-    id: 'flights',
-    name: 'Live Flights',
-    source: 'OpenSky Network',
-    icon: '✈',
-  },
-  {
-    id: 'military',
-    name: 'Military Flights',
-    source: 'adsb.lol',
-    icon: '⬡',
-  },
-  {
-    id: 'earthquakes',
-    name: 'Earthquakes (24h)',
-    source: 'USGS',
-    icon: '◎',
-  },
-  {
-    id: 'satellites',
-    name: 'Satellites',
-    source: 'CelesTrak',
-    icon: '◉',
-  },
-  {
-    id: 'cctv',
-    name: 'CCTV Mesh',
-    source: 'Open Eagle Eye · 40+ countries',
-    icon: '⌖',
-  },
-  {
-    id: 'traffic',
-    name: 'Street Traffic',
-    source: 'OpenStreetMap',
-    icon: '▣',
-    disabled: true,
-  },
-  {
-    id: 'weather',
-    name: 'Weather Radar',
-    source: 'NOAA NEXRAD',
-    icon: '☁',
-    disabled: true,
-  },
-  {
-    id: 'bikeshare',
-    name: 'Bikeshare',
-    source: 'GBFS',
-    icon: '◎',
-    disabled: true,
-  },
-];
-
-const STYLE_CLASSES = [
-  'style-crt',
-  'style-nvg',
-  'style-flir',
-  'style-noir',
-  'style-snow',
-  'style-anime',
-];
-
+/**
+ * worldview/ui.js — RAYSpy dashboard UI (v2 tile-grid layout)
+ * Matches the reference screenshot: top bar with logo+search+clock,
+ * glossy colored tile grid on the right (OPS/INTEL/ASSETS tabs),
+ * bottom icon toolbar. The Cesium 3D globe is untouched — it renders
+ * in #cesiumContainer behind this overlay, and the globe area here is
+ * fully transparent / pointer-events:none so all camera interaction
+ * (scroll zoom, drag rotate, click) passes straight through to Cesium.
+ */
 export function mountWorldviewUI(viewer, handlers) {
+  injectStyles();
+
   const overlay = document.createElement('div');
   overlay.id = 'worldview-overlay';
-
-  const now = new Date();
-  const rec = now.toISOString().replace('T', ' ').slice(0, 19) + 'Z';
-
-  overlay.innerHTML = `
-    <header class="wv-header">
-      <div class="wv-logo">RAYSpy</div>
-      <div class="wv-tagline">NO PLACE LEFT BEHIND</div>
-      <div class="wv-classification">OPEN DATA // PUBLIC FEEDS // EDUCATIONAL<br/>TLE · ADS-B · CCTV MESH</div>
-      <div class="wv-summary" id="wv-summary">Hybrid map · no terrain until DEM enabled</div>
-    </header>
-
-    <div class="wv-rec"><span class="dot">●</span> REC ${rec}<br/>ORB: LIVE · PASS: —</div>
-    <div class="wv-active-style">ACTIVE STYLE<br/><strong id="wv-style-label">NORMAL</strong></div>
-
-    <div class="wv-search">
-      <input type="text" id="search-input" placeholder="Search city…" />
-      <button type="button" id="search-btn">SEARCH</button>
-    </div>
-
-    <aside class="wv-dock wv-dock-left" id="dock-left">
-      <button type="button" class="wv-dock-toggle" id="collapse-left" title="Collapse panel">‹</button>
-      <div class="wv-dock-body">
-        <section class="wv-panel wv-layers-inner">
-          <h2>DATA LAYERS</h2>
-          <div id="wv-layer-list"></div>
-        </section>
-        <section class="wv-panel wv-cctv-panel" id="cctv-panel" hidden>
-          <h2>CCTV MESH</h2>
-          <div class="wv-cctv-btns">
-            <button type="button" class="wv-chip active" id="cctv-on">CCTV ON</button>
-            <button type="button" class="wv-chip" id="cctv-nearest">NEAREST</button>
-            <button type="button" class="wv-chip" id="cctv-prev">PREV</button>
-            <button type="button" class="wv-chip" id="cctv-next">NEXT</button>
-          </div>
-          <label class="wv-field-label">Location
-            <select id="cctv-select"></select>
-          </label>
-          <div class="wv-cctv-btns">
-            <button type="button" class="wv-chip active" id="cctv-coverage">COVERAGE ON</button>
-            <button type="button" class="wv-chip" id="cctv-projection">PROJECTION</button>
-            <button type="button" class="wv-chip active" id="cctv-align">ALIGN · DRAPE</button>
-          </div>
-          <div class="wv-cal-sliders" id="cctv-sliders">
-            <label>HEADING <input type="range" data-cal="heading" min="0" max="360" value="180" /></label>
-            <label>PITCH <input type="range" data-cal="pitch" min="-45" max="5" value="-10" /></label>
-            <label>FOV <input type="range" data-cal="fov" min="20" max="90" value="45" /></label>
-            <label>RANGE <input type="range" data-cal="range" min="200" max="2000" value="600" /></label>
-            <label>HEIGHT <input type="range" data-cal="height" min="20" max="400" value="120" /></label>
-          </div>
-          <div class="wv-cctv-preview" id="cctv-preview">
-            <span class="wv-cctv-preview-placeholder">Select a node for live feed</span>
-          </div>
-          <p class="wv-cctv-hint">Worldwide public cameras (Open Eagle Eye) · ~2s snapshot refresh</p>
-        </section>
-      </div>
-    </aside>
-
-    <aside class="wv-dock wv-dock-right" id="dock-right">
-      <button type="button" class="wv-dock-toggle" id="collapse-right" title="Collapse panel">›</button>
-      <div class="wv-dock-body">
-        <nav class="wv-right-tabs">
-          <button type="button" class="active" data-tab="controls">OPS</button>
-          <button type="button" data-tab="intel">INTEL</button>
-        </nav>
-        <div class="wv-tab-pane active" id="tab-controls">
-          <button type="button" class="wv-ctrl-btn" id="btn-dem">TERRAIN / DEM</button>
-          <button type="button" class="wv-ctrl-btn" id="btn-bloom">BLOOM</button>
-          <button type="button" class="wv-ctrl-btn" id="btn-sharpen">SHARPEN</button>
-          <div class="wv-slider-row" id="sharpen-row" hidden>
-            SHARPEN <span id="sharpen-val">50</span>%
-            <input type="range" id="sharpen-range" min="0" max="100" value="50" />
-          </div>
-          <button type="button" class="wv-ctrl-btn" id="btn-hud">HUD</button>
-          <button type="button" class="wv-ctrl-btn active" id="btn-panoptic">PANOPTIC</button>
-          <div class="wv-slider-row" id="density-row">
-            DENSITY <span id="density-val">58</span>%
-            <input type="range" id="density-range" min="10" max="100" value="58" />
-          </div>
-          <button type="button" class="wv-ctrl-btn" id="btn-clean-ui">CLEAN UI</button>
-          <h3 class="wv-subhead">PARAMETERS</h3>
-          <div class="wv-slider-row">
-            PIXELATION <span id="px-val">0</span>%
-            <input type="range" id="fx-pixelation" min="0" max="100" value="0" />
-          </div>
-          <div class="wv-slider-row">
-            DISTORTION <span id="dist-val">0</span>%
-            <input type="range" id="fx-distortion" min="0" max="100" value="0" />
-          </div>
-          <div class="wv-slider-row">
-            INSTABILITY <span id="inst-val">0</span>%
-            <input type="range" id="fx-instability" min="0" max="100" value="0" />
-          </div>
-        </div>
-        <div class="wv-tab-pane" id="tab-intel">
-          <div id="wv-detail-panel"></div>
-        </div>
-      </div>
-    </aside>
-
-    <footer class="wv-footer">
-      <div class="wv-panel wv-locations">
-        <h3>LOCATIONS +</h3>
-        <div class="row">Location: <span id="wv-loc">—</span></div>
-        <div class="row">Landmark: <span id="wv-landmark">—</span></div>
-      </div>
-      <div class="wv-panel wv-styles">
-        <h3>STYLE PRESETS</h3>
-        <div class="wv-style-btns">
-          <button type="button" data-style="normal" class="active">NORMAL</button>
-          <button type="button" data-style="crt">CRT</button>
-          <button type="button" data-style="nvg">NVG</button>
-          <button type="button" data-style="flir">FLIR</button>
-          <button type="button" data-style="noir">NOIR</button>
-          <button type="button" data-style="snow">SNOW</button>
-          <button type="button" data-style="anime">ANIME</button>
-        </div>
-      </div>
-    </footer>
-
-    <div class="wv-selection-hud" id="wv-selection-hud"></div>
-    <div class="wv-cctv-hud" id="cctv-hud-feed" hidden></div>
-  `;
-
+  overlay.innerHTML = buildHTML();
   document.getElementById('worldview-app').appendChild(overlay);
 
-  const spyHud = new SpyHud(viewer, overlay);
+  // ── Clock ──────────────────────────────────────────────────────────
+  (function tick() {
+    const n = new Date();
+    const el = overlay.querySelector('#wv-clock');
+    if (el) el.textContent = n.toISOString().slice(0, 16).replace('T', ' ') + 'Z';
+    setTimeout(tick, 1000);
+  })();
 
-  const detailEl = overlay.querySelector('#wv-detail-panel');
-  const previewFeed = new CctvFeedPlayer(
-    overlay.querySelector('#cctv-preview')
-  );
-  const hudFeed = new CctvFeedPlayer(overlay.querySelector('#cctv-hud-feed'));
-  let detailFeed = null;
-
-  renderDetailPanel(detailEl, null);
-
-  const layerList = overlay.querySelector('#wv-layer-list');
-  const layerState = {};
-
-  for (const layer of DATA_LAYERS) {
-    layerState[layer.id] = false;
-    const row = document.createElement('div');
-    row.className = `wv-layer-row${layer.disabled ? ' disabled' : ''}`;
-    row.dataset.layer = layer.id;
-    row.innerHTML = `
-      <div class="wv-layer-icon">${layer.icon}</div>
-      <div class="wv-layer-info">
-        <div class="wv-layer-name">${layer.name}</div>
-        <div class="wv-layer-source">${layer.source}</div>
-      </div>
-      <span class="wv-layer-count" data-count="${layer.id}"></span>
-      <div class="wv-toggle" data-toggle="${layer.id}"></div>
-    `;
-    if (!layer.disabled) {
-      row.addEventListener('click', () => handlers.onLayerToggle(layer.id));
+  // ── Search ─────────────────────────────────────────────────────────
+  const searchWrap  = overlay.querySelector('#searchWrap');
+  const searchBtn   = overlay.querySelector('#searchBtn');
+  const searchInput = overlay.querySelector('#wv-search-input');
+  searchBtn.addEventListener('click', () => {
+    const open = searchWrap.classList.toggle('open');
+    if (open) setTimeout(() => searchInput.focus(), 320);
+  });
+  document.addEventListener('click', e => {
+    if (!searchWrap.contains(e.target)) searchWrap.classList.remove('open');
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const q = searchInput.value.trim();
+      handlers.onSearch?.(q);
+      const frame = overlay.querySelector('.browser-frame');
+      const urlBar = overlay.querySelector('.browser-url');
+      if (frame && q) {
+        const url = /^https?:\/\//i.test(q) ? q : `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+        frame.src = url;
+        if (urlBar) urlBar.textContent = q.slice(0, 18);
+      }
+      searchWrap.classList.remove('open');
     }
-    layerList.appendChild(row);
+    if (e.key === 'Escape') searchWrap.classList.remove('open');
+  });
+
+  // ── Tabs (OPS / INTEL / ASSETS) ───────────────────────────────────
+  overlay.querySelectorAll('.rs-tab').forEach(t => t.addEventListener('click', () => {
+    overlay.querySelectorAll('.rs-tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+  }));
+
+  // ── Bottom toolbar ────────────────────────────────────────────────
+  overlay.querySelectorAll('[data-tool]').forEach(el => el.addEventListener('click', () => {
+    overlay.querySelectorAll('[data-tool]').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+  }));
+
+  // ── Data layer tiles (toggle real layers via main.js handlers) ──────
+  overlay.querySelectorAll('[data-toggle]').forEach(tile => {
+    tile.addEventListener('click', () => {
+      handlers.onLayerToggle?.(tile.dataset.toggle);
+    });
+  });
+
+  // ── DEM / Panoptic / style tiles ──────────────────────────────────
+  overlay.querySelector('#btn-dem')?.addEventListener('click', handlers.onLoadDem);
+
+  overlay.querySelector('#btn-panoptic')?.addEventListener('click', e => {
+    const tile = e.currentTarget;
+    const on = !tile.classList.contains('on');
+    tile.classList.toggle('on', on);
+    handlers.onPanoptic?.(on);
+  });
+
+  // Bloom / sharpen / hud / clean-ui — visual filter toggles on the Cesium canvas
+  const canvasEl = () => document.querySelector('#cesiumContainer canvas');
+  const activeFx = { bloom: false, sharpen: false, viewMode: 'normal' };
+  function applyFx() {
+    const c = canvasEl();
+    if (!c) return;
+    const parts = ['drop-shadow(0 0 12px #22d3ee88)'];
+    if (activeFx.bloom)   parts.push('brightness(1.15) saturate(1.2)');
+    if (activeFx.sharpen) parts.push('contrast(1.25)');
+    if (activeFx.viewMode === 'crt')      parts.push('contrast(1.35) saturate(0.8) brightness(0.95)');
+    if (activeFx.viewMode === 'panoptic') parts.push('grayscale(0.35) contrast(1.2) hue-rotate(-8deg)');
+    if (activeFx.viewMode === 'anime')    parts.push('saturate(1.65) contrast(1.15) brightness(1.05)');
+    c.style.filter = parts.join(' ');
   }
+  overlay.querySelector('#btn-bloom')?.addEventListener('click', e => {
+    activeFx.bloom = !activeFx.bloom;
+    e.currentTarget.classList.toggle('on', activeFx.bloom);
+    applyFx();
+  });
+  overlay.querySelector('#btn-sharpen')?.addEventListener('click', e => {
+    activeFx.sharpen = !activeFx.sharpen;
+    e.currentTarget.classList.toggle('on', activeFx.sharpen);
+    applyFx();
+  });
+
+  // View mode cycle tile — press repeatedly: normal -> crt -> panoptic -> anime -> normal
+  const VIEW_MODES = ['normal', 'crt', 'panoptic', 'anime'];
+  let viewModeIndex = 0;
+  overlay.querySelector('#btn-viewmode')?.addEventListener('click', e => {
+    viewModeIndex = (viewModeIndex + 1) % VIEW_MODES.length;
+    const mode = VIEW_MODES[viewModeIndex];
+    activeFx.viewMode = mode;
+    applyFx();
+
+    const panel = overlay.querySelector('.globe-panel');
+    panel?.classList.remove('fx-crt', 'fx-panoptic', 'fx-anime');
+    if (mode !== 'normal') panel?.classList.add(`fx-${mode}`);
+
+    const tile = e.currentTarget;
+    tile.classList.toggle('on', mode !== 'normal');
+    const valueEl = tile.querySelector('#wv-viewmode-value');
+    if (valueEl) valueEl.textContent = mode === 'normal' ? 'NRM' : mode.toUpperCase();
+  });
+  overlay.querySelector('#btn-hud')?.addEventListener('click', e => {
+    const on = e.currentTarget.classList.toggle('on');
+    overlay.querySelectorAll('.hud-tl,.hud-tr,.hud-bl,.hud-br,.g-status').forEach(el => {
+      el.style.display = on ? 'none' : '';
+    });
+  });
+  overlay.querySelector('#btn-clean-ui')?.addEventListener('click', e => {
+    const on = e.currentTarget.classList.toggle('on');
+    overlay.querySelector('.rs-top').style.display = on ? 'none' : '';
+    overlay.querySelector('.right-panel').style.display = on ? 'none' : '';
+    overlay.querySelector('.rs-bot').style.display = on ? 'none' : '';
+  });
+
+  // Style preset row (NRM / etc.)
+  overlay.querySelectorAll('.style-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      overlay.querySelectorAll('.style-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const label = overlay.querySelector('#wv-style-label');
+      if (label) label.textContent = chip.dataset.style.toUpperCase();
+    });
+  });
+
+  // ── CCTV sub-panel ─────────────────────────────────────────────────
+  overlay.querySelector('#cctv-coverage')?.addEventListener('click', e => {
+    e.target.classList.toggle('active');
+    handlers.onCctvCoverage?.(e.target.classList.contains('active'));
+  });
+  overlay.querySelector('#cctv-fov-wedges')?.addEventListener('click', e => {
+    e.target.classList.toggle('active');
+    handlers.onCctvFovWedges?.(e.target.classList.contains('active'));
+  });
+  overlay.querySelector('#cctv-projection')?.addEventListener('click', e => {
+    e.target.classList.toggle('active');
+    handlers.onCctvProjection?.(e.target.classList.contains('active'));
+  });
+  overlay.querySelector('#cctv-select')?.addEventListener('change', e => {
+    handlers.onCctvSelect?.(e.target.value);
+  });
+  overlay.querySelector('#cctv-prev')?.addEventListener('click', () => handlers.onCctvAction?.('prev'));
+  overlay.querySelector('#cctv-next')?.addEventListener('click', () => handlers.onCctvAction?.('next'));
+  overlay.querySelector('#cctv-nearest')?.addEventListener('click', () => handlers.onCctvAction?.('nearest'));
+
+  // ── ui object returned to main.js ────────────────────────────────
+  const detailEl = overlay.querySelector('#wv-detail');
 
   const ui = {
     overlay,
     detailEl,
+
     setLayerOn(layerId, on) {
-      layerState[layerId] = on;
-      const toggle = overlay.querySelector(`[data-toggle="${layerId}"]`);
-      if (toggle) toggle.classList.toggle('on', on);
-      if (layerId === 'cctv') {
-        overlay.querySelector('#cctv-panel').hidden = !on;
-      }
+      overlay.querySelectorAll(`[data-toggle="${layerId}"]`).forEach(t => t.classList.toggle('on', on));
     },
+
     setLayerCount(layerId, count) {
       const el = overlay.querySelector(`[data-count="${layerId}"]`);
-      if (!el) return;
-      el.textContent = count != null && count > 0 ? formatCount(count) : '';
+      if (el) el.textContent = count;
     },
+
     setSummary(text) {
       const el = overlay.querySelector('#wv-summary');
       if (el) el.textContent = text;
     },
-    setSelection(text) {
-      const hud = overlay.querySelector('#wv-selection-hud');
-      if (!text) {
-        hud.classList.remove('visible');
-        hud.textContent = '';
-        return;
-      }
-      hud.textContent = text;
-      hud.classList.add('visible');
-    },
-    setSpyTrack(detail) {
-      if (!detail?.trackEntity || !detail?.hudTag) {
-        spyHud.clear();
-        return;
-      }
-      spyHud.track(detail.trackEntity, {
-        tag: detail.hudTag,
-        military: !!detail.military,
-      });
-    },
-    clearSpyTrack() {
-      spyHud.clear();
-    },
-    setLocation(loc, landmark) {
-      overlay.querySelector('#wv-loc').textContent = loc || '—';
-      overlay.querySelector('#wv-landmark').textContent = landmark || '—';
-    },
-    setStyleLabel(name) {
-      overlay.querySelector('#wv-style-label').textContent = name;
-    },
+
     setDemEnabled() {
-      const btn = overlay.querySelector('#btn-dem');
-      btn.textContent = 'DEM ENABLED';
-      btn.classList.add('active');
-      btn.disabled = true;
+      const tile = overlay.querySelector('#btn-dem');
+      if (tile) tile.classList.add('on');
     },
+
+    setLocation(loc, landmark) {
+      const locEl = overlay.querySelector('#wv-loc');
+      const lmEl  = overlay.querySelector('#wv-landmark');
+      if (locEl) locEl.textContent = loc || '—';
+      if (lmEl)  lmEl.textContent  = landmark || '—';
+    },
+
+    setLandmark(loc, landmark) { ui.setLocation(loc, landmark); },
+
     setDetail(detail) {
-      if (detailFeed) detailFeed.stop();
-      detailFeed = null;
-      renderDetailPanel(detailEl, detail);
-      if (detail?.type === 'cctv' && detail.feedUrl) {
-        const slot = detailEl.querySelector('#detail-cctv-feed');
-        if (slot) {
-          detailFeed = new CctvFeedPlayer(slot);
-          detailFeed.play(detail.feedUrl, { label: detail.title });
-        }
-      }
-      if (detail) ui.openIntelTab();
+      if (!detailEl) return;
+      if (!detail) { detailEl.innerHTML = ''; return; }
+      const rows = Object.entries(detail)
+        .filter(([k, v]) => typeof v !== 'object' && typeof v !== 'function')
+        .map(([k, v]) => `<div class="dt-row"><span class="dt-k">${k}</span><span class="dt-v">${v}</span></div>`)
+        .join('');
+      detailEl.innerHTML = `<div class="dt-title">${detail.title || detail.camera?.label || 'INTEL'}</div>${rows}`;
     },
-    openIntelTab() {
-      overlay.querySelectorAll('.wv-right-tabs button').forEach((b) => {
-        b.classList.toggle('active', b.dataset.tab === 'intel');
-      });
-      overlay.querySelector('#tab-controls').classList.remove('active');
-      overlay.querySelector('#tab-intel').classList.add('active');
+
+    setSpyTrack(detail) {
+      const el = overlay.querySelector('#wv-spy-track');
+      if (el && detail) el.textContent = `TRACKING: ${detail.title || detail.camera?.label || '—'}`;
     },
+
+    clearSpyTrack() {
+      const el = overlay.querySelector('#wv-spy-track');
+      if (el) el.textContent = '';
+    },
+
     populateCctvSelect(cameras, selectedId) {
       const sel = overlay.querySelector('#cctv-select');
-      const byCountry = new Map();
-      for (const c of cameras) {
-        const cc = c.country || 'XX';
-        if (!byCountry.has(cc)) byCountry.set(cc, []);
-        byCountry.get(cc).push(c);
-      }
-      let html = '';
-      for (const cc of [...byCountry.keys()].sort()) {
-        html += `<optgroup label="${cc}">`;
-        for (const c of byCountry.get(cc)) {
-          html += `<option value="${c.id}"${c.id === selectedId ? ' selected' : ''}>${c.city} — ${c.label}</option>`;
-        }
-        html += '</optgroup>';
-      }
-      sel.innerHTML = html;
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— pick camera —</option>' +
+        cameras.map(c => `<option value="${c.id}"${c.id === selectedId ? ' selected' : ''}>${c.label || c.id}</option>`).join('');
     },
-    updateCctvPreview(detail) {
-      if (!detail?.feedUrl) {
-        previewFeed.stop();
-        hudFeed.stop();
-        overlay.querySelector('#cctv-hud-feed').hidden = true;
-        return;
-      }
-      previewFeed.play(detail.feedUrl, { label: detail.title });
-      const hud = overlay.querySelector('#cctv-hud-feed');
-      hud.hidden = false;
-      hudFeed.play(detail.feedUrl, { label: detail.title });
-    },
+
     stopCctvFeeds() {
-      previewFeed.stop();
-      hudFeed.stop();
-      overlay.querySelector('#cctv-hud-feed').hidden = true;
-      if (detailFeed) detailFeed.stop();
-      detailFeed = null;
+      overlay.querySelectorAll('.wv-cctv-feed-img').forEach(img => { img.src = ''; });
     },
-    syncCctvSliders(cal) {
-      if (!cal) return;
-      overlay.querySelectorAll('#cctv-sliders [data-cal]').forEach((input) => {
-        const key = input.dataset.cal;
-        if (cal[key] != null) input.value = cal[key];
-      });
+
+    syncCctvSliders(calibration) {
+      // No calibration sliders in this v2 layout — no-op
+    },
+
+    updateCctvPreview(detail) {
+      const img = overlay.querySelector('#wv-cctv-preview-img');
+      if (img && detail?.feedUrl) { img.src = detail.feedUrl; img.style.display = 'block'; }
     },
   };
-
-  overlay.querySelector('#collapse-left').addEventListener('click', () => {
-    overlay.querySelector('#dock-left').classList.toggle('collapsed');
-  });
-  overlay.querySelector('#collapse-right').addEventListener('click', () => {
-    overlay.querySelector('#dock-right').classList.toggle('collapsed');
-  });
-
-  overlay.querySelectorAll('.wv-right-tabs button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      overlay.querySelectorAll('.wv-right-tabs button').forEach((b) => {
-        b.classList.toggle('active', b.dataset.tab === tab);
-      });
-      overlay.querySelector('#tab-controls').classList.toggle('active', tab === 'controls');
-      overlay.querySelector('#tab-intel').classList.toggle('active', tab === 'intel');
-    });
-  });
-
-  overlay.querySelector('#btn-dem').addEventListener('click', handlers.onLoadDem);
-  overlay.querySelector('#btn-clean-ui').addEventListener('click', () => {
-    overlay.classList.toggle('clean-ui');
-  });
-
-  const cesiumEl = document.getElementById('cesiumContainer');
-  const applyFxParams = () => {
-    const px = overlay.querySelector('#fx-pixelation').value;
-    const dist = overlay.querySelector('#fx-distortion').value;
-    const inst = overlay.querySelector('#fx-instability').value;
-    overlay.querySelector('#px-val').textContent = px;
-    overlay.querySelector('#dist-val').textContent = dist;
-    overlay.querySelector('#inst-val').textContent = inst;
-    cesiumEl.style.setProperty('--fx-pixel', `${px}%`);
-    cesiumEl.style.setProperty('--fx-distort', `${dist * 0.15}deg`);
-    cesiumEl.style.setProperty('--fx-jitter', `${inst * 0.08}px`);
-  };
-  ['fx-pixelation', 'fx-distortion', 'fx-instability'].forEach((id) => {
-    overlay.querySelector(`#${id}`).addEventListener('input', applyFxParams);
-  });
-
-  overlay.querySelectorAll('[data-style]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      overlay.querySelectorAll('[data-style]').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      const style = btn.dataset.style;
-      cesiumEl.classList.remove(...STYLE_CLASSES, 'fx-params-on');
-      if (style !== 'normal') {
-        cesiumEl.classList.add(`style-${style}`);
-        if (['nvg', 'flir'].includes(style)) cesiumEl.classList.add('fx-params-on');
-      }
-      ui.setStyleLabel(style.toUpperCase());
-    });
-  });
-
-  const bloomBtn = overlay.querySelector('#btn-bloom');
-  bloomBtn.addEventListener('click', () => {
-    bloomBtn.classList.toggle('active');
-    cesiumEl.classList.toggle('fx-bloom');
-  });
-
-  const sharpenBtn = overlay.querySelector('#btn-sharpen');
-  const sharpenRow = overlay.querySelector('#sharpen-row');
-  sharpenBtn.addEventListener('click', () => {
-    sharpenBtn.classList.toggle('active');
-    sharpenRow.hidden = !sharpenBtn.classList.contains('active');
-    cesiumEl.classList.toggle('fx-sharpen', sharpenBtn.classList.contains('active'));
-  });
-  overlay.querySelector('#sharpen-range').addEventListener('input', (e) => {
-    overlay.querySelector('#sharpen-val').textContent = e.target.value;
-  });
-
-  overlay.querySelector('#btn-panoptic').addEventListener('click', () => {
-    const on = overlay.querySelector('#btn-panoptic').classList.toggle('active');
-    handlers.onPanoptic?.(on);
-  });
-
-  overlay.querySelector('#btn-hud').addEventListener('click', (e) => {
-    e.target.classList.toggle('active');
-    const hud = overlay.querySelector('#wv-selection-hud');
-    hud.style.borderWidth = e.target.classList.contains('active') ? '2px' : '1px';
-  });
-
-  const searchBtn = overlay.querySelector('#search-btn');
-  const searchInput = overlay.querySelector('#search-input');
-  searchBtn.addEventListener('click', () => handlers.onSearch(searchInput.value));
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handlers.onSearch(searchInput.value);
-  });
-
-  overlay.querySelector('#cctv-nearest').addEventListener('click', () => {
-    handlers.onCctvAction?.('nearest');
-  });
-  overlay.querySelector('#cctv-prev').addEventListener('click', () => {
-    handlers.onCctvAction?.('prev');
-  });
-  overlay.querySelector('#cctv-next').addEventListener('click', () => {
-    handlers.onCctvAction?.('next');
-  });
-  overlay.querySelector('#cctv-coverage').addEventListener('click', (e) => {
-    e.target.classList.toggle('active');
-    handlers.onCctvCoverage?.(e.target.classList.contains('active'));
-  });
-  overlay.querySelector('#cctv-projection').addEventListener('click', (e) => {
-    e.target.classList.toggle('active');
-    handlers.onCctvProjection?.(e.target.classList.contains('active'));
-  });
-  overlay.querySelector('#cctv-select').addEventListener('change', (e) => {
-    handlers.onCctvSelect?.(e.target.value);
-  });
-  overlay.querySelectorAll('#cctv-sliders [data-cal]').forEach((input) => {
-    input.addEventListener('input', () => {
-      const patch = {};
-      overlay.querySelectorAll('#cctv-sliders [data-cal]').forEach((el) => {
-        patch[el.dataset.cal] = Number(el.value);
-      });
-      handlers.onCctvCalibration?.(patch);
-    });
-  });
 
   return ui;
 }
 
-function formatCount(n) {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
+function buildHTML() {
+  return `
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<div class="rs" id="app">
+
+  <div class="rs-top">
+    <div class="search-wrap" id="searchWrap">
+      <div class="search-input-wrap">
+        <input class="rs-search" id="wv-search-input" placeholder="SEARCH LOCATION, ASSET OR INTEL...">
+      </div>
+      <div class="search-icon-btn" id="searchBtn"><i class="ti ti-search"></i></div>
+    </div>
+    <div class="rs-tr">REC <span id="wv-clock">--</span> &nbsp;|&nbsp; ORB:<span>LIVE</span> &nbsp;|&nbsp; STYLE:<span id="wv-style-label">NORMAL</span></div>
+  </div>
+
+  <div class="rs-main">
+    <div class="globe-panel">
+      <div class="hud-tl"></div><div class="hud-tr"></div>
+      <div class="hud-bl"></div><div class="hud-br"></div>
+      <div class="g-status" id="wv-summary">No DEM · Esri imagery + OSM</div>
+      <div class="g-status-bottom"><span id="wv-spy-track"></span></div>
+      <div class="g-loc-row">
+        <span>Location: <b id="wv-loc">—</b></span>
+        <span>Landmark: <b id="wv-landmark">—</b></span>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="rs-panel-brand">
+        <p class="brand-title">RAYSPY</p>
+        <p class="brand-subtitle">tactical intelligence system</p>
+      </div>
+
+      <div class="rs-tabs">
+        <div class="rs-tab active">OPS</div>
+        <div class="rs-tab">INTEL</div>
+        <div class="rs-tab">ASSETS</div>
+      </div>
+
+      <div class="tiles-wrap">
+      <div class="tiles">
+        <div class="tile t-flights grey" data-toggle="flights">
+          <div class="ton"></div>
+          <div class="tv" data-count="flights">0</div>
+          <div class="tl">Live Flights</div>
+          <div class="ts">OpenSky Network</div>
+        </div>
+        <div class="tile t-alerts scarlet">
+          <div class="ton"></div>
+          <div class="tv sm">34</div>
+          <div class="tl">Alerts</div>
+        </div>
+        <div class="tile t-sats green" data-toggle="satellites">
+          <div class="ton"></div>
+          <div class="tv sm" data-count="satellites"></div>
+          <div class="tl">Satellites</div>
+          <div class="ts">CelesTrak</div>
+        </div>
+        <div class="tile t-mil mustard" data-toggle="military">
+          <div class="tv sm" data-count="military"></div>
+          <div class="tl">Mil Flt</div>
+          <div class="ts">adsb.lol</div>
+        </div>
+        <div class="tile t-cctv green" data-toggle="cctv">
+          <div class="ton"></div>
+          <div class="tv sm" data-count="cctv"></div>
+          <div class="tl">CCTV Net</div>
+          <div class="ts">OpenEagleEye</div>
+        </div>
+        <div class="tile t-traffic grey">
+          <div class="ton"></div>
+          <div class="tv-row">
+            <div><div class="tv sm">7,392</div><div class="tl">Traffic Idx</div></div>
+            <div><div class="tv sm">ON</div><div class="tl">Flow</div></div>
+          </div>
+        </div>
+        <div class="tile t-dem mustard" id="btn-dem"><div class="tl">Terrain / DEM</div></div>
+        <div class="tile t-bloom scarlet" id="btn-bloom"><div class="tl">Bloom</div></div>
+        <div class="tile t-sharp grey" id="btn-sharpen"><div class="tl">Sharpen</div></div>
+        <div class="tile t-pan green" id="btn-panoptic">
+          <div class="ton"></div>
+          <div class="tv md">50%</div>
+          <div class="tl">Panoptic</div>
+          <div class="ts">Density</div>
+        </div>
+        <div class="tile t-browser browser-tile">
+          <div class="browser-chrome">
+            <span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span>
+            <span class="browser-url">browser uplink</span>
+          </div>
+          <iframe class="browser-frame" src="about:blank" title="Browser uplink" sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+        <div class="tile t-hud grey" id="btn-hud"><div class="tl">HUD</div></div>
+        <div class="tile t-clean mustard" id="btn-clean-ui"><div class="tl">Clean UI</div></div>
+        <div class="tile t-alts scarlet talert"><div class="ton"></div><div class="tv sm">34</div><div class="tl">Active Alts</div></div>
+        <div class="tile t-wx grey" data-toggle="weather"><div class="tl">Weather</div></div>
+        <div class="tile t-style prow">
+          <div class="style-chip active" data-style="normal"><span>NRM</span></div>
+        </div>
+        <div class="tile t-quake mustard" data-toggle="earthquakes">
+          <div class="tv sm" data-count="earthquakes"></div>
+          <div class="tl">Earthquakes</div><div class="ts">USGS 24H</div>
+        </div>
+        <div class="tile t-bike grey" data-toggle="bikeshare" style="opacity:.5"><div class="tl">Bikeshare</div><div class="ts">Offline</div></div>
+        <div class="tile t-viewmode blue" id="btn-viewmode">
+          <div class="ton"></div>
+          <div class="tv sm" id="wv-viewmode-value">NRM</div>
+          <div class="tl">View Mode</div>
+          <div class="ts">CRT/Panoptic/Anime</div>
+        </div>
+        <div class="tile t-orb green" data-toggle="orbital"><div class="tl">Orbital</div><div class="ts">Mode</div></div>
+        <div class="tile t-cctv-bar prow">
+          <button class="wv-chip active" id="cctv-coverage" type="button">COVERAGE ON</button>
+          <button class="wv-chip active" id="cctv-fov-wedges" type="button">FOV WEDGES</button>
+          <button class="wv-chip" id="cctv-projection" type="button">PROJECTION</button>
+        </div>
+        <div class="tile t-cctv-nav prow">
+          <button class="wv-chip" id="cctv-prev" type="button">◀ PREV</button>
+          <button class="wv-chip" id="cctv-nearest" type="button">NEAREST</button>
+          <button class="wv-chip" id="cctv-next" type="button">NEXT ▶</button>
+        </div>
+      </div>
+      </div>
+
+      <select id="cctv-select" class="wv-select cctv-select-compact"></select>
+      <img id="wv-cctv-preview-img" class="wv-cctv-feed-img" style="width:100%;margin-top:4px;display:none" />
+
+      <div id="wv-detail" class="wv-detail"></div>
+    </div>
+  </div>
+
+  <div class="rs-bot">
+    <div class="rs-tool" data-tool="measure"><i class="ti ti-ruler t-icon"></i><span class="t-label">Measure</span></div>
+    <div class="rs-tool" data-tool="draw"><i class="ti ti-pencil t-icon"></i><span class="t-label">Draw</span></div>
+    <div class="rs-tool" data-tool="location"><i class="ti ti-map-pin t-icon"></i><span class="t-label">Location</span></div>
+    <div class="rs-tool active" data-tool="track"><i class="ti ti-radar t-icon"></i><span class="t-label">Track</span></div>
+    <div class="rs-tool" data-tool="filter"><i class="ti ti-filter t-icon"></i><span class="t-label">Filter</span></div>
+    <div class="rs-tool" data-tool="export"><i class="ti ti-upload t-icon"></i><span class="t-label">Export</span></div>
+    <div class="rs-tool" data-tool="layers"><i class="ti ti-layout-grid t-icon"></i><span class="t-label">Layers</span></div>
+  </div>
+</div>
+  `;
+}
+
+function injectStyles() {
+  if (document.getElementById('rs-ui-css')) return;
+  const s = document.createElement('style');
+  s.id = 'rs-ui-css';
+  s.textContent = `
+:root{
+  --bg-page:#0B0D14; --bg-header:#0F1219; --bg-map:#12151F; --bg-panel:#0F1219;
+  --tile-bg:#1A1F2E; --border-subtle:rgba(255,255,255,0.06); --border-subtle-2:rgba(255,255,255,0.05);
+  --border-subtle-3:rgba(255,255,255,0.1);
+  --accent:#D946EF; --accent-border:rgba(217,70,239,0.3); --accent-border-strong:rgba(217,70,239,0.35);
+  --accent-border-soft:rgba(217,70,239,0.25);
+  --status-green:#4ADE80; --status-green-border:rgba(74,222,128,0.35); --status-green-border-strong:rgba(74,222,128,0.4);
+  --status-red:#F87171; --status-red-border:rgba(239,68,68,0.35);
+  --status-amber:#F59E0B; --status-amber-border:rgba(245,158,11,0.35);
+  --status-blue:#60A5FA; --status-blue-border:rgba(96,165,250,0.35);
+  --text-primary:#E5E7EB; --text-secondary:#9CA3AF; --text-muted:#6B7280; --text-faint:#4B5563;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-mono:'Share Tech Mono',monospace;
+}
+*{box-sizing:border-box;}
+#worldview-overlay{position:absolute;inset:0;z-index:10;pointer-events:none;display:flex;flex-direction:column;background:transparent;}
+.rs{position:absolute;inset:0;display:flex;flex-direction:column;pointer-events:none;font-family:var(--font-sans);color:var(--text-secondary);}
+
+.rs-top{pointer-events:auto;background:var(--bg-header);border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;padding:0 16px;height:38px;gap:12px;flex-shrink:0;justify-content:space-between;}
+.search-wrap{position:relative;display:flex;align-items:center;margin-right:auto;}
+.search-icon-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--accent-border-strong);background:#12151F;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;z-index:2;transition:border-color .2s,background .2s;}
+.search-icon-btn:hover{border-color:var(--accent);background:rgba(217,70,239,0.08);}
+.search-icon-btn i{font-size:14px;color:var(--accent);}
+.search-input-wrap{overflow:hidden;width:0;transition:width .35s cubic-bezier(.4,0,.2,1),opacity .3s;opacity:0;position:absolute;left:34px;}
+.search-wrap.open .search-input-wrap{width:240px;opacity:1;}
+.rs-search{width:240px;background:#12151F;border:1px solid var(--accent-border);color:var(--text-primary);font-family:var(--font-mono);font-size:10px;padding:5px 10px;letter-spacing:.05em;outline:none;border-radius:4px;}
+.rs-search::placeholder{color:var(--text-muted);}
+.rs-tr{font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);letter-spacing:.05em;white-space:nowrap;}
+.rs-tr span{color:var(--status-green);}
+
+.rs-main{display:flex;flex:1;min-height:0;position:relative;pointer-events:none;gap:0;}
+
+.globe-panel{flex:1.7;position:relative;overflow:hidden;pointer-events:none;background:transparent;}
+.hud-tl{position:absolute;top:12px;left:12px;width:18px;height:18px;border-top:2px solid var(--status-red);border-left:2px solid var(--status-red);z-index:5;}
+.hud-tr{position:absolute;top:12px;right:12px;width:18px;height:18px;border-top:2px solid var(--status-green);border-right:2px solid var(--status-green);z-index:5;}
+.hud-bl{position:absolute;bottom:52px;left:12px;width:18px;height:18px;border-bottom:2px solid var(--status-red);border-left:2px solid var(--status-red);z-index:5;}
+.hud-br{position:absolute;bottom:52px;right:12px;width:18px;height:18px;border-bottom:2px solid var(--status-green);border-right:2px solid var(--status-green);z-index:5;}
+.g-status{position:absolute;bottom:34px;left:0;right:0;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-align:center;letter-spacing:.08em;z-index:5;}
+.g-status-bottom{position:absolute;bottom:20px;left:12px;font-family:var(--font-mono);font-size:9px;color:var(--text-secondary);z-index:5;}
+.g-loc-row{position:absolute;top:38px;left:12px;display:flex;gap:16px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);z-index:5;}
+.g-loc-row b{color:var(--text-primary);font-weight:400;}
+.globe-panel.fx-crt::before{content:'';position:absolute;inset:-2%;pointer-events:none;z-index:3;opacity:.22;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");background-size:180px 180px;animation:rs-crt-static .2s steps(2) infinite;}
+.globe-panel.fx-crt::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:4;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,0.06) 0 1px,transparent 1px 3px);mix-blend-mode:overlay;animation:rs-crt-flicker 2.6s steps(30) infinite;}
+@keyframes rs-crt-static{0%{transform:translate(0,0);}33%{transform:translate(-2%,1%);}66%{transform:translate(1%,-2%);}100%{transform:translate(-1%,2%);}}
+@keyframes rs-crt-flicker{0%,100%{opacity:1;}8%{opacity:.85;}9%{opacity:1;}47%{opacity:.9;}48%{opacity:1;}72%{opacity:.82;}73%{opacity:1;}}
+.globe-panel.fx-panoptic::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:4;background-image:repeating-linear-gradient(0deg,rgba(74,222,128,0.08) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(74,222,128,0.08) 0 1px,transparent 1px 24px);}
+.globe-panel.fx-anime::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:4;box-shadow:inset 0 0 90px rgba(217,70,239,0.28);}
+
+.right-panel{pointer-events:auto;width:360px;background:var(--bg-panel);border-left:1px solid var(--accent-border-soft);display:flex;flex-direction:column;overflow:hidden;z-index:5;padding:0;}
+
+.rs-panel-brand{padding:14px 14px 10px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;text-align:center;}
+.brand-title{font-size:18px;font-weight:500;color:var(--accent);letter-spacing:.15em;margin:0;font-family:var(--font-sans);}
+.brand-subtitle{font-size:9px;color:var(--text-muted);letter-spacing:.1em;margin:2px 0 0;text-transform:lowercase;}
+
+.rs-tabs{display:flex;gap:8px;border-bottom:1px solid var(--border-subtle);padding:0 14px 8px;flex-shrink:0;font-size:10px;letter-spacing:.08em;}
+.rs-tab{padding:0 2px 6px;text-align:left;font-family:var(--font-sans);font-size:10px;letter-spacing:.08em;color:var(--text-muted);cursor:pointer;border-bottom:1px solid transparent;transition:color .2s,border-color .2s;text-transform:lowercase;flex:0 0 auto;}
+.rs-tab.active{color:var(--text-primary);border-bottom:1px solid var(--accent);}
+.rs-tab:hover:not(.active){color:var(--text-secondary);}
+
+.tiles-wrap{flex:1;min-height:0;padding:0 14px 8px;overflow:hidden;}
+.tiles{
+  height:100%;
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  grid-template-rows:repeat(8,minmax(0,1fr));
+  gap:6px;
+  border:1px solid var(--accent-border-soft);
+  border-radius:6px;
+  padding:6px;
+  background:var(--bg-page);
+  overflow:hidden;
+}
+
+.tile{border-radius:6px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-end;padding:6px;cursor:pointer;position:relative;overflow:hidden;user-select:none;border:1px solid var(--border-subtle);background:var(--tile-bg);transition:filter .12s ease,border-color .12s ease;min-height:0;min-width:0;}
+.tile::before,.tile::after{content:none;}
+.tile:hover{filter:brightness(1.08);}
+.tile.on{outline:1px solid var(--accent);outline-offset:-1px;border-color:var(--accent-border-strong);}
+
+.t-flights{grid-column:1/3;grid-row:1/4;}
+.t-alerts{grid-column:3/4;grid-row:1/2;border-color:var(--status-red-border);}
+.t-sats{grid-column:4/5;grid-row:1/3;border-color:var(--status-green-border);}
+.t-mil{grid-column:5/7;grid-row:1/2;border-color:var(--status-amber-border);}
+.t-cctv{grid-column:3/5;grid-row:2/3;border-color:var(--status-green-border);}
+.t-traffic{grid-column:5/7;grid-row:2/4;}
+.t-dem{grid-column:1/2;grid-row:4/5;border-color:var(--status-amber-border);}
+.t-bloom{grid-column:2/3;grid-row:4/5;border-color:var(--status-red-border);}
+.t-sharp{grid-column:3/4;grid-row:3/4;}
+.t-pan{grid-column:4/6;grid-row:3/6;border-color:var(--status-green-border-strong);}
+.t-browser{grid-column:6/7;grid-row:3/9;padding:0;justify-content:stretch;align-items:stretch;cursor:default;overflow:hidden;border-color:var(--border-subtle-3);}
+.t-hud{grid-column:1/2;grid-row:5/6;}
+.t-clean{grid-column:2/3;grid-row:5/6;border-color:var(--status-amber-border);}
+.t-alts{grid-column:3/4;grid-row:4/5;border-color:var(--status-red-border);}
+.t-style{grid-column:1/2;grid-row:6/7;}
+.t-wx{grid-column:2/3;grid-row:6/7;}
+.t-quake{grid-column:3/5;grid-row:5/6;border-color:var(--status-amber-border);}
+.t-orb{grid-column:1/3;grid-row:7/9;border-color:var(--status-green-border);}
+.t-bike{grid-column:3/5;grid-row:6/7;opacity:.55;}
+.t-viewmode{grid-column:3/4;grid-row:7/9;border-color:var(--status-blue-border);}
+.t-cctv-bar{grid-column:4/7;grid-row:7/8;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:4px;padding:4px 6px;cursor:default;border-top:1px solid var(--border-subtle);}
+.t-cctv-nav{grid-column:4/7;grid-row:8/9;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:4px;padding:4px 6px;cursor:default;}
+
+.tl{font-size:8px;font-weight:500;letter-spacing:.02em;text-transform:lowercase;color:var(--text-secondary);line-height:1.1;z-index:3;}
+.ts{font-size:7px;color:var(--text-muted);text-transform:lowercase;line-height:1;z-index:3;}
+.tv{font-size:15px;font-weight:500;line-height:1;color:var(--text-primary);font-family:var(--font-sans);z-index:3;}
+.scarlet .tv,.t-alerts .tv,.t-alts .tv,.t-bloom .tv{color:var(--status-red);}
+.green .tv,.t-sats .tv,.t-cctv .tv,.t-pan .tv,.t-orb .tv{color:var(--status-green);}
+.mustard .tv,.t-mil .tv,.t-dem .tv,.t-quake .tv,.t-clean .tv{color:var(--status-amber);}
+.blue .tv,.t-viewmode .tv{color:var(--status-blue);}
+.tv.sm{font-size:13px;}.tv.md{font-size:16px;}
+.tv-row{display:flex;justify-content:space-between;width:100%;gap:4px;z-index:3;}
+.ton{display:none;}
+.talert{animation:rs-alertglow 1.2s ease-in-out infinite;}
+@keyframes rs-alertglow{0%,100%{filter:brightness(1)}50%{filter:brightness(1.12)}}
+
+.browser-tile{background:#12151F;}
+.browser-chrome{display:flex;align-items:center;gap:4px;padding:4px 6px;background:rgba(0,0,0,.35);border-bottom:1px solid var(--border-subtle);width:100%;flex-shrink:0;z-index:4;}
+.browser-dot{width:4px;height:4px;border-radius:50%;background:var(--text-faint);}
+.browser-url{font-family:var(--font-mono);font-size:8px;color:var(--text-secondary);letter-spacing:.04em;margin-left:2px;text-transform:lowercase;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1;}
+.browser-frame{flex:1;width:100%;height:100%;border:none;background:#060a10;min-height:0;max-height:100%;pointer-events:auto;display:block;}
+
+.prow{justify-content:flex-start;align-items:center;background:var(--tile-bg);}
+.style-chip{display:flex;align-items:center;justify-content:center;width:28px;height:18px;border-radius:4px;background:transparent;border:1px solid var(--border-subtle-3);cursor:pointer;transition:all .15s;}
+.style-chip span{font-size:8px;font-weight:500;color:var(--text-secondary);}
+.style-chip.active{background:rgba(217,70,239,0.12);border-color:var(--accent-border-strong);}
+.style-chip.active span{color:var(--accent);}
+
+.cctv-select-compact{margin:6px 14px 0;flex-shrink:0;width:calc(100% - 28px);}
+.wv-chip{padding:3px 8px;border:1px solid var(--accent-border-strong);border-radius:4px;background:transparent;color:var(--accent);font-family:var(--font-sans);font-size:9px;letter-spacing:.04em;cursor:pointer;transition:all .2s;text-transform:lowercase;line-height:1.3;}
+.wv-chip.active{color:var(--accent);border-color:var(--accent-border-strong);background:rgba(217,70,239,0.08);}
+.wv-chip:not(.active){color:var(--text-secondary);border-color:var(--border-subtle-3);}
+.wv-chip:hover{color:var(--text-primary);border-color:var(--accent-border);}
+.wv-select{width:100%;background:#12151F;border:1px solid var(--accent-border);color:var(--text-primary);font-family:var(--font-mono);font-size:9px;padding:6px 8px;outline:none;flex-shrink:0;border-radius:6px;}
+.wv-detail{padding:6px 14px;font-family:var(--font-mono);font-size:8px;color:var(--text-muted);border-top:1px solid var(--border-subtle);flex-shrink:0;max-height:56px;overflow-y:auto;}
+.dt-title{color:var(--text-primary);font-size:9px;letter-spacing:.08em;margin-bottom:4px;}
+.dt-row{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-subtle-2);}
+.dt-k{color:var(--text-muted);}.dt-v{color:var(--text-secondary);}
+
+.rs-bot{pointer-events:auto;background:var(--bg-header);border-top:1px solid var(--border-subtle-2);display:flex;justify-content:center;gap:28px;padding:10px;flex-shrink:0;align-items:center;margin:0 14px 10px;border-radius:8px;border:1px solid var(--border-subtle-2);}
+.rs-tool{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 10px;cursor:pointer;position:relative;border-radius:6px;transition:background .15s;}
+.rs-tool::after{display:none;}
+.t-icon{font-size:16px;color:var(--text-secondary);transition:color .15s;}
+.t-label{font-family:var(--font-sans);font-size:9px;letter-spacing:.02em;color:var(--text-muted);text-transform:lowercase;transition:color .15s;}
+.rs-tool.active{background:var(--tile-bg);}
+.rs-tool.active .t-icon,.rs-tool:hover .t-icon{color:var(--accent);}
+.rs-tool.active .t-label,.rs-tool:hover .t-label{color:var(--text-primary);}
+  `;
+  document.head.appendChild(s);
 }

@@ -64,11 +64,13 @@ export class CctvLayer {
     this._entityByCamId = new Map();
     this.visible = false;
     this.showCoverage = true;
+    this.showFovWedges = true;
     this.showProjection = false;
     this.selectedId = null;
     this.index = 0;
     this.calibration = {};
     this.countryCount = 0;
+    this._fovWedgeIds = [];
   }
 
   async load(onProgress) {
@@ -83,6 +85,7 @@ export class CctvLayer {
     this.dataSource.entities.removeAll();
     this.coverageSource.entities.removeAll();
     this._entityByCamId.clear();
+    this._fovWedgeIds = [];
 
     for (const cam of this.cameras) {
       const geo = normalizeGeo(cam);
@@ -118,7 +121,55 @@ export class CctvLayer {
       });
 
       this._entityByCamId.set(cam.id, entity);
+      this._addFovWedge(cam, geo);
     }
+  }
+
+  /**
+   * Small always-on FOV wedge for every camera (not just the selected one).
+   * Uses cam.heading/cam.fov/cam.rangeM if the source provided them, else
+   * falls back to a short, generic forward-facing wedge so every camera
+   * still shows *something* even without known orientation metadata.
+   * Hidden by default (showFovWedges = false) since hundreds of polygons
+   * rendering globally is expensive — toggle on via setShowFovWedges(true).
+   */
+  _addFovWedge(cam, geo) {
+    const heading = cam.heading ?? 0;
+    const fov     = cam.fov ?? 60;
+    // Larger, more visible ambient indicator — was capped at 80m (invisible
+    // at any normal city-zoom altitude); now scales with declared range but
+    // has a much higher visible floor.
+    const range   = Math.max(Math.min(cam.rangeM ?? 220, 400), 150);
+    const half = fov / 2;
+    const positions = [Cesium.Cartesian3.fromDegrees(geo.lon, geo.lat, 1.5)];
+
+    for (let i = 0; i <= 16; i++) {
+      const h = heading - half + (fov * i) / 16;
+      const p = destinationPoint(geo.lon, geo.lat, h, range);
+      positions.push(Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 1.5));
+    }
+    positions.push(Cesium.Cartesian3.fromDegrees(geo.lon, geo.lat, 1.5));
+
+    const wedgeId = `cctv-fov-${entityKey(cam).replace('cctv-', '')}`;
+    const wedge = this.dataSource.entities.add({
+      id: wedgeId,
+      show: this.showFovWedges,
+      position: fixedGroundPosition(geo.lon, geo.lat, 0),
+      polygon: {
+        hierarchy: positions,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        material: Cesium.Color.LIME.withAlpha(0.28),
+        outline: true,
+        outlineColor: Cesium.Color.LIME.withAlpha(0.85),
+        outlineWidth: 2,
+        classificationType: Cesium.ClassificationType.BOTH,
+        // Only render when reasonably close — avoids thousands of wedges
+        // cluttering a world-scale view, but keeps them visible at any
+        // normal city/neighborhood zoom level.
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 80_000),
+      },
+    });
+    this._fovWedgeIds.push(wedgeId);
   }
 
   _highlightSelection() {
@@ -251,6 +302,15 @@ export class CctvLayer {
   setShowCoverage(on) {
     this.showCoverage = on;
     this._refreshAllCoverage();
+  }
+
+  /** Toggle the lightweight always-on FOV wedge shown for every camera. */
+  setShowFovWedges(on) {
+    this.showFovWedges = on;
+    for (const id of this._fovWedgeIds) {
+      const e = this.dataSource.entities.getById(id);
+      if (e) e.show = on;
+    }
   }
 
   setShowProjection(on) {
